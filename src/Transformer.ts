@@ -2,7 +2,6 @@ import * as ESTree from "estree";
 import * as ts from "typescript";
 import {
   convertExpression,
-  createDefaultExport,
   createExport,
   createIdentifier,
   createProgram,
@@ -87,7 +86,15 @@ export class Transformer {
     this.ast.body.push(node);
   }
 
-  maybeMarkAsExported(node: ts.Node, id: ts.Identifier) {
+  popStatementIf(node: ESTree.Statement) {
+    const last = this.ast.body[this.ast.body.length - 1];
+    if (last === node) {
+      return this.ast.body.pop();
+    }
+    return;
+  }
+
+  maybeMarkAsExported(node: ts.Node, id?: ts.Identifier) {
     const loc = { start: node.pos, end: node.pos };
 
     if (!matchesModifier(node, ts.ModifierFlags.Export) || !node.modifiers) {
@@ -95,13 +102,26 @@ export class Transformer {
     }
 
     const isExportDefault = matchesModifier(node, ts.ModifierFlags.ExportDefault);
-    const name = isExportDefault ? "default" : id.getText();
+
+    if (isExportDefault) {
+      const name = "default";
+      if (this.exports.has(name)) {
+        return true;
+      }
+      this.exports.add(name);
+
+      return "default";
+    } else if (!id) {
+      throw new UnsupportedSyntaxError(node, `Exported Expression needs a "name".`);
+    }
+
+    const name = id.getText();
 
     if (this.exports.has(name)) {
       return true;
     }
 
-    this.pushStatement((isExportDefault ? createDefaultExport : createExport)(id, loc));
+    this.pushStatement(createExport(id, loc));
 
     this.exports.add(name);
     return true;
@@ -210,32 +230,48 @@ export class Transformer {
     scope.pushIdentifierReference(node.name);
   }
 
-  convertFunctionDeclaration(node: ts.FunctionDeclaration) {
-    // istanbul ignore if
-    if (!node.name) {
-      throw new UnsupportedSyntaxError(node, `FunctionDeclaration should have a name`);
+  fixDefaultExport(exported: boolean | "default", scope: DeclarationScope, node: ts.Node) {
+    if (exported === "default") {
+      this.popStatementIf(scope.declaration);
+      this.pushStatement(
+        withStartEnd(
+          {
+            type: "ExportDefaultDeclaration",
+            declaration: scope.declaration,
+          },
+          node,
+        ),
+      );
     }
+  }
 
-    this.maybeMarkAsExported(node, node.name);
+  convertFunctionDeclaration(node: ts.FunctionDeclaration) {
+    const exported = this.maybeMarkAsExported(node, node.name);
 
     const scope = this.createDeclaration(node, node.name);
     scope.fixModifiers(node);
 
-    scope.pushIdentifierReference(node.name);
+    this.fixDefaultExport(exported, scope, node);
+
+    if (node.name) {
+      scope.pushIdentifierReference(node.name);
+    }
 
     scope.convertParametersAndType(node);
   }
 
   convertClassOrInterfaceDeclaration(node: ts.ClassDeclaration | ts.InterfaceDeclaration) {
     // istanbul ignore if
-    if (!node.name) {
-      throw new UnsupportedSyntaxError(node, `ClassDeclaration / InterfaceDeclaration should have a name`);
+    if (ts.isInterfaceDeclaration(node) && !node.name) {
+      throw new UnsupportedSyntaxError(node, `InterfaceDeclaration should have a name`);
     }
 
-    this.maybeMarkAsExported(node, node.name);
+    const exported = this.maybeMarkAsExported(node, node.name);
 
     const scope = this.createDeclaration(node, node.name);
     scope.fixModifiers(node);
+
+    this.fixDefaultExport(exported, scope, node);
 
     const typeVariables = scope.convertTypeParameters(node.typeParameters);
     scope.convertHeritageClauses(node);
@@ -298,7 +334,7 @@ export class Transformer {
           {
             type: "ExportAllDeclaration",
             source,
-            exported: null
+            exported: null,
           },
           node,
         ),

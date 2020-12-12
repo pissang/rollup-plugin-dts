@@ -1,4 +1,4 @@
-import ts from "typescript";
+import ts, { NodeArray, TypeParameterDeclaration } from "typescript";
 import { UnsupportedSyntaxError } from "./errors";
 
 /**
@@ -23,7 +23,7 @@ interface Export {
 }
 interface Item {
   type: string;
-  generics?: number;
+  generics?: NodeArray<TypeParameterDeclaration>;
 }
 interface Namespace {
   name: string;
@@ -99,7 +99,7 @@ export class NamespaceFixer {
       }
 
       if (ts.isClassDeclaration(node)) {
-        items[node.name!.getText()] = { type: "class", generics: node.typeParameters && node.typeParameters.length };
+        items[node.name!.getText()] = { type: "class", generics: node.typeParameters };
       } else if (ts.isFunctionDeclaration(node)) {
         // a function has generics, but these don’t need to be specified explicitly,
         // since functions are treated as values.
@@ -107,10 +107,10 @@ export class NamespaceFixer {
       } else if (ts.isInterfaceDeclaration(node)) {
         items[node.name.getText()] = {
           type: "interface",
-          generics: node.typeParameters && node.typeParameters.length,
+          generics: node.typeParameters,
         };
       } else if (ts.isTypeAliasDeclaration(node)) {
-        items[node.name.getText()] = { type: "type", generics: node.typeParameters && node.typeParameters.length };
+        items[node.name.getText()] = { type: "type", generics: node.typeParameters };
       } else if (ts.isModuleDeclaration(node) && ts.isIdentifier(node.name)) {
         items[node.name.getText()] = { type: "namespace" };
       } else if (ts.isEnumDeclaration(node)) {
@@ -178,12 +178,12 @@ export class NamespaceFixer {
           const { type, generics } = itemTypes[localName]!;
           if (type === "interface" || type === "type") {
             // an interface is just a type
-            const typeParams = renderTypeParams(generics);
-            code += `type ${ns.name}_${exportedName}${typeParams} = ${localName}${typeParams};\n`;
+            const typeParams = renderTypeParams(code, itemTypes, generics);
+            code += `type ${ns.name}_${exportedName}${typeParams.in} = ${localName}${typeParams.out};\n`;
           } else if (type === "enum" || type === "class") {
             // enums and classes are both types and values
-            const typeParams = renderTypeParams(generics);
-            code += `type ${ns.name}_${exportedName}${typeParams} = ${localName}${typeParams};\n`;
+            const typeParams = renderTypeParams(code, itemTypes, generics);
+            code += `type ${ns.name}_${exportedName}${typeParams.in} = ${localName}${typeParams.out};\n`;
             code += `declare const ${ns.name}_${exportedName}: typeof ${localName};\n`;
           } else {
             // functions and vars are just values
@@ -213,9 +213,19 @@ export class NamespaceFixer {
   }
 }
 
-function renderTypeParams(num: number | undefined) {
-  if (!num) {
-    return "";
+function renderTypeParams(code: string, _items: { [key: string]: Item }, typeParameters?: NodeArray<TypeParameterDeclaration>): {
+  in: string
+  out: string
+} {
+  if (!typeParameters || !typeParameters.length) {
+    return {in: '', out: ''};
   }
-  return `<${Array.from({ length: num }, (_, i) => `_${i}`).join(", ")}>`;
+
+  function renderSingleParam(paramNode: TypeParameterDeclaration, _idx: number): string {
+    return code.substr(paramNode.getStart(), paramNode.getEnd() - paramNode.getStart());
+  }
+  return {
+    in: `<${typeParameters.map(renderSingleParam).join(", ")}>`,
+    out: `<${typeParameters.map((param) => param.name.getText()).join(", ")}>`
+  }
 }

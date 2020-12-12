@@ -1,5 +1,5 @@
 import path from "path";
-import { PluginImpl, SourceDescription } from "rollup";
+import { PluginImpl,SourceDescription,OutputChunk, OutputAsset } from "rollup";
 import ts from "typescript";
 
 import { NamespaceFixer } from "./NamespaceFixer";
@@ -59,6 +59,7 @@ const plugin: PluginImpl<Options> = (options = {}) => {
 
   // Parse a TypeScript module into an ESTree program.
   const allTypeReferences = new Map<string, Set<string>>();
+  const allNamespacesFixers = new Map<string, NamespaceFixer>();
 
   function transformFile(input: ts.SourceFile): SourceDescription {
     const preprocessed = preProcess({ sourceFile: input });
@@ -77,6 +78,10 @@ const plugin: PluginImpl<Options> = (options = {}) => {
     }
 
     return { code, ast: output.ast as any };
+  }
+
+  function isOutputChunk(chunk: OutputChunk | OutputAsset): chunk is OutputChunk {
+    return chunk.type === 'chunk';
   }
 
   return {
@@ -192,20 +197,28 @@ const plugin: PluginImpl<Options> = (options = {}) => {
 
     renderChunk(code, chunk) {
       const source = ts.createSourceFile(chunk.fileName, code, ts.ScriptTarget.Latest, true);
-      const fixer = new NamespaceFixer(source);
-
-      const typeReferences = new Set<string>();
-      for (const fileName of Object.keys(chunk.modules)) {
-        for (const ref of allTypeReferences.get(fileName.split("\\").join("/")) || []) {
-          typeReferences.add(ref);
-        }
-      }
-
-      code = writeBlock(Array.from(typeReferences, (ref) => `/// <reference types="${ref}" />`));
-      code += fixer.fix();
+      const fixer = new NamespaceFixer(source, allNamespacesFixers);
+      allNamespacesFixers.set(chunk.fileName, fixer);
 
       return { code, map: { mappings: "" } };
     },
+
+    generateBundle(_options, bundle) {
+      for (let chunk of Object.values(bundle)) {
+        if (isOutputChunk(chunk)) {
+          const typeReferences = new Set<string>();
+          for (const fileName of Object.keys(chunk.modules)) {
+            for (const ref of allTypeReferences.get(fileName.split("\\").join("/")) || []) {
+              typeReferences.add(ref);
+            }
+          }
+
+          const fixer = allNamespacesFixers.get(chunk.fileName);
+          chunk.code = writeBlock(Array.from(typeReferences, (ref) => `/// <reference types="${ref}" />`))
+            + (fixer ? fixer.fix() : chunk.code);
+        }
+      }
+    }
   };
 };
 

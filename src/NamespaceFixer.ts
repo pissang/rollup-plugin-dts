@@ -32,7 +32,7 @@ interface Namespace {
 }
 
 export class NamespaceFixer {
-  constructor(private sourceFile: ts.SourceFile) {}
+  constructor(private sourceFile: ts.SourceFile, private allNamespacesFixers: Map<string, NamespaceFixer>) {}
 
   findNamespaces() {
     const namespaces: Array<Namespace> = [];
@@ -67,6 +67,24 @@ export class NamespaceFixer {
         ts.isStringLiteral(node.moduleSpecifier)
       ) {
         let { text } = node.moduleSpecifier;
+        if (ts.isImportDeclaration(node)) {
+          const moduleName = text.replace('./', '');
+          const fixer = this.allNamespacesFixers.get(moduleName);
+          if (fixer) {
+            const namespace = fixer.findNamespaces();
+            const importedItemTypes = namespace.itemTypes;
+            const namedBindings = node.importClause && node.importClause.namedBindings;
+            if (namedBindings && ts.isNamedImports(namedBindings)) {
+              for (let specifier of namedBindings.elements) {
+                const importName = specifier.name.getText();
+                const { type, generics } = importedItemTypes[importName]!;
+                // All import are types
+                items[specifier.name.getText()] = {type, generics};
+              };
+            }
+          }
+        }
+
         if (text.startsWith(".") && text.endsWith(".d.ts")) {
           let end = node.moduleSpecifier.getEnd() - 1; // -1 to account for the quote
           namespaces.unshift({

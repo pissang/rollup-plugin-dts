@@ -37,6 +37,7 @@ export class NamespaceFixer {
   findNamespaces() {
     const namespaces: Array<Namespace> = [];
     const items: { [key: string]: Item } = {};
+    const exportsMap: { [key: string]: string} = {};
 
     for (const node of this.sourceFile.statements) {
       const location = {
@@ -72,12 +73,14 @@ export class NamespaceFixer {
           const fixer = this.allNamespacesFixers.get(moduleName);
           if (fixer) {
             const namespace = fixer.findNamespaces();
-            const importedItemTypes = namespace.itemTypes;
             const namedBindings = node.importClause && node.importClause.namedBindings;
             if (namedBindings && ts.isNamedImports(namedBindings)) {
               for (let specifier of namedBindings.elements) {
-                const importName = specifier.name.getText();
-                const { type, generics } = importedItemTypes[importName]!;
+                const importName = specifier.propertyName ?
+                  specifier.propertyName.getText() : specifier.name.getText();
+                const itemName = namespace.exportsMap[importName]!;
+
+                const { type, generics } = namespace.itemTypes[itemName]!;
                 // All import are types
                 items[specifier.name.getText()] = {type, generics};
               };
@@ -115,6 +118,18 @@ export class NamespaceFixer {
         items[node.name.getText()] = { type: "namespace" };
       } else if (ts.isEnumDeclaration(node)) {
         items[node.name.getText()] = { type: "enum" };
+      } else if (ts.isNamedExports(node)) {
+        // Reversed map
+        for (let el of node.elements) {
+          exportsMap[el.name.getText()] = el.propertyName ? el.propertyName.getText() : el.name.getText();
+        }
+      } else if (ts.isExportDeclaration(node)) {
+        if (node.exportClause && ts.isNamedExports(node.exportClause)) {
+          // Reversed map
+          for (let el of node.exportClause.elements) {
+            exportsMap[el.name.getText()] = el.propertyName ? el.propertyName.getText() : el.name.getText();
+          }
+        }
       }
       if (!ts.isVariableStatement(node)) {
         continue;
@@ -161,7 +176,7 @@ export class NamespaceFixer {
         location,
       });
     }
-    return { namespaces, itemTypes: items };
+    return { namespaces, itemTypes: items, exportsMap };
   }
 
   public fix() {

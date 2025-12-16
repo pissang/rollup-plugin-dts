@@ -27,12 +27,18 @@ interface Item {
 }
 interface Namespace {
   name: string;
+  explicitFileExtension: string;
   exports: Array<Export>;
   location: { start: number; end: number };
 }
 
 export class NamespaceFixer {
-  constructor(private sourceFile: ts.SourceFile, private allNamespacesFixers: Map<string, NamespaceFixer>) {}
+  constructor(
+    private sourceFile: ts.SourceFile,
+    private allNamespacesFixers: Map<string, NamespaceFixer>,
+    private explicitFileExtension: Namespace["explicitFileExtension"],
+    private useUMD: boolean
+  ) {}
 
   findNamespaces() {
     const namespaces: Array<Namespace> = [];
@@ -54,6 +60,7 @@ export class NamespaceFixer {
       if (ts.isEmptyStatement(node)) {
         namespaces.unshift({
           name: "",
+          explicitFileExtension: "",
           exports: [],
           location,
         });
@@ -69,6 +76,8 @@ export class NamespaceFixer {
       ) {
         let { text } = node.moduleSpecifier;
         if (ts.isImportDeclaration(node)) {
+          // PENDING: At present, this branch is never entered in echarts (see `echarts/build/pre-publish.js`).
+          //  But if entered, it needs to be fixed and tested.
           const moduleName = text.replace('./', '');
           const fixer = this.allNamespacesFixers.get(moduleName);
           if (fixer) {
@@ -92,9 +101,10 @@ export class NamespaceFixer {
           let end = node.moduleSpecifier.getEnd() - 1; // -1 to account for the quote
           namespaces.unshift({
             name: "",
+            explicitFileExtension: this.explicitFileExtension,
             exports: [],
             location: {
-              start: end - 5,
+              start: end - 5, // ".d.ts".length
               end,
             },
           });
@@ -131,6 +141,7 @@ export class NamespaceFixer {
           }
         }
       }
+
       if (!ts.isVariableStatement(node)) {
         continue;
       }
@@ -172,10 +183,12 @@ export class NamespaceFixer {
       // sort in reverse order, since we will do string manipulation
       namespaces.unshift({
         name,
+        explicitFileExtension: "",
         exports,
         location,
       });
     }
+
     return { namespaces, itemTypes: items, exportsMap };
   }
 
@@ -205,6 +218,9 @@ export class NamespaceFixer {
             code += `declare const ${ns.name}_${exportedName}: typeof ${localName};\n`;
           }
         }
+      }
+      if (ns.explicitFileExtension) {
+        code += `.${ns.explicitFileExtension}`;
       }
       if (ns.name) {
         code += `declare namespace ${ns.name} {\n`;

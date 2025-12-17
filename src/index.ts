@@ -35,18 +35,20 @@ export interface Options {
    */
   explicitFileExtension?: string;
   /**
-   * `false`: Use ESM export, i.e., `export { Xxx };`
-   * `true`: Use UMD export, i.e., `declare namespace Xxx { export { ... } } export as namespace Xxx; export = Xxx;`
+   * - empty: Use ESM export, i.e.,
+   *  `export { Xxx };`
+   * - "some_name": Use UMD export, i.e.,
+   *  `declare namespace some_name { export { ... } } export as namespace some_name; export = some_name;`
    */
-  useUMD?: boolean;
+  umdExportName?: string;
 }
 
 const plugin: PluginImpl<Options> = (options = {}) => {
   const {
     respectExternal = false,
     compilerOptions = {},
-    explicitFileExtension = '',
-    useUMD = false,
+    explicitFileExtension = "",
+    umdExportName = "",
   } = options;
   // There exists one Program object per entry point,
   // except when all entry points are ".d.ts" modules.
@@ -218,7 +220,7 @@ const plugin: PluginImpl<Options> = (options = {}) => {
 
     renderChunk(code, chunk) {
       const source = ts.createSourceFile(chunk.fileName, code, ts.ScriptTarget.Latest, true);
-      const fixer = new NamespaceFixer(source, allNamespacesFixers, explicitFileExtension, useUMD);
+      const fixer = new NamespaceFixer(source, allNamespacesFixers, explicitFileExtension, umdExportName);
       allNamespacesFixers.set(chunk.fileName, fixer);
 
       return { code, map: { mappings: "" } };

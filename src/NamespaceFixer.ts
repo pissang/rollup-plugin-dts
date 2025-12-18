@@ -27,12 +27,19 @@ interface Item {
 }
 interface Namespace {
   name: string;
+  explicitFileExtension: string;
+  umdExportName: string;
   exports: Array<Export>;
   location: { start: number; end: number };
 }
 
 export class NamespaceFixer {
-  constructor(private sourceFile: ts.SourceFile, private allNamespacesFixers: Map<string, NamespaceFixer>) {}
+  constructor(
+    private sourceFile: ts.SourceFile,
+    private allNamespacesFixers: Map<string, NamespaceFixer>,
+    private explicitFileExtension: Namespace["explicitFileExtension"],
+    private umdExportName: Namespace["umdExportName"]
+  ) {}
 
   findNamespaces() {
     const namespaces: Array<Namespace> = [];
@@ -54,6 +61,8 @@ export class NamespaceFixer {
       if (ts.isEmptyStatement(node)) {
         namespaces.unshift({
           name: "",
+          explicitFileExtension: "",
+          umdExportName: "",
           exports: [],
           location,
         });
@@ -69,6 +78,8 @@ export class NamespaceFixer {
       ) {
         let { text } = node.moduleSpecifier;
         if (ts.isImportDeclaration(node)) {
+          // PENDING: At present, this branch is never entered in echarts (see `echarts/build/pre-publish.js`).
+          //  But if entered, it needs to be fixed and tested.
           const moduleName = text.replace('./', '');
           const fixer = this.allNamespacesFixers.get(moduleName);
           if (fixer) {
@@ -92,9 +103,11 @@ export class NamespaceFixer {
           let end = node.moduleSpecifier.getEnd() - 1; // -1 to account for the quote
           namespaces.unshift({
             name: "",
+            explicitFileExtension: this.explicitFileExtension,
+            umdExportName: "",
             exports: [],
             location: {
-              start: end - 5,
+              start: end - 5, // ".d.ts".length
               end,
             },
           });
@@ -131,6 +144,11 @@ export class NamespaceFixer {
           }
         }
       }
+
+      if (handleESMExport(node, namespaces, this.umdExportName)) {
+        continue;
+      }
+
       if (!ts.isVariableStatement(node)) {
         continue;
       }
@@ -172,11 +190,58 @@ export class NamespaceFixer {
       // sort in reverse order, since we will do string manipulation
       namespaces.unshift({
         name,
+        explicitFileExtension: "",
         exports,
+        umdExportName: "",
         location,
       });
     }
+
     return { namespaces, itemTypes: items, exportsMap };
+
+    function handleESMExport(
+      node: ts.Statement,
+      namespaces: Array<Namespace>,
+      umdExportName: Namespace["umdExportName"]
+    ): boolean {
+      if (
+        !umdExportName ||
+        !ts.isExportDeclaration(node) ||
+        !node.exportClause ||
+        !ts.isNamedExports(node.exportClause)
+      ) {
+        return false;
+      }
+
+      const location = {
+        start: node.getStart(),
+        end: node.getEnd(),
+      };
+
+      const exports: Array<Export> = [];
+      for (let el of node.exportClause.elements) {
+        exports.push({
+          exportedName: el.name.getText(),
+          localName: el.propertyName ? el.propertyName.getText() : el.name.getText(),
+        });
+      }
+
+      // PENDING: Not a correct impl to avoid naming conflict, but bad case
+      // does not occur currently and is unlikely to occur in future.
+      const name = umdExportName + "__ECUMDEXPT__";
+
+      // sort in reverse order, since we will do string manipulation
+      namespaces.unshift({
+        name: name,
+        explicitFileExtension: "",
+        exports,
+        umdExportName: umdExportName,
+        location,
+      });
+
+      return true;
+    }
+
   }
 
   public fix() {
@@ -187,6 +252,10 @@ export class NamespaceFixer {
     for (const ns of namespaces) {
       const codeAfter = code.slice(ns.location.end);
       code = code.slice(0, ns.location.start);
+
+      if (ns.explicitFileExtension) {
+        code += `.${ns.explicitFileExtension}`;
+      }
 
       for (const { exportedName, localName } of ns.exports) {
         if (exportedName === localName) {
@@ -216,9 +285,13 @@ export class NamespaceFixer {
             code += `    ${localName} as ${exportedName},\n`;
           }
         }
-
         code += `  };\n`;
-        code += `}`;
+        code += `}\n`;
+
+        if (ns.umdExportName) {
+          code += `export as namespace ${ns.umdExportName};\n`;
+          code += `export = ${ns.name};\n`;
+        }
       }
 
       code += codeAfter;

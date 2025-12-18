@@ -23,10 +23,33 @@ export interface Options {
    * `baseUrl` and `paths` properties, you can pass in `compilerOptions`.
    */
   compilerOptions?: ts.CompilerOptions;
+  /**
+   * - `package.json` `{"type": "module"}` requires explicit file extensions in
+   *  imports; otherwise `tsc` reports error TS(2834).
+   * - When importing a `.d.ts`, a proper solution can be
+   *  `import {xxx} from "./yyy.js"` instead of `from "./yyy.d.ts"`; otherwise
+   *  `tsc` reports error TS(2846).
+   *
+   * Use `explicitFileExtension: "js"` to use `.js` as the extension of a import paths.
+   * If omitted, the generated code will be `import {xxx} from "./yyy"`.
+   */
+  explicitFileExtension?: string;
+  /**
+   * - empty: Use ESM export, i.e.,
+   *  `export { Xxx };`
+   * - "some_name": Use UMD export, i.e.,
+   *  `declare namespace some_name { export { ... } } export as namespace some_name; export = some_name;`
+   */
+  umdExportName?: string;
 }
 
 const plugin: PluginImpl<Options> = (options = {}) => {
-  const { respectExternal = false, compilerOptions = {} } = options;
+  const {
+    respectExternal = false,
+    compilerOptions = {},
+    explicitFileExtension = "",
+    umdExportName = "",
+  } = options;
   // There exists one Program object per entry point,
   // except when all entry points are ".d.ts" modules.
   let programs: Array<ts.Program> = [];
@@ -197,7 +220,7 @@ const plugin: PluginImpl<Options> = (options = {}) => {
 
     renderChunk(code, chunk) {
       const source = ts.createSourceFile(chunk.fileName, code, ts.ScriptTarget.Latest, true);
-      const fixer = new NamespaceFixer(source, allNamespacesFixers);
+      const fixer = new NamespaceFixer(source, allNamespacesFixers, explicitFileExtension, umdExportName);
       allNamespacesFixers.set(chunk.fileName, fixer);
 
       return { code, map: { mappings: "" } };
